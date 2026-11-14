@@ -71,7 +71,7 @@ CERT="${PANEL_SETTINGS[4]}"
 KEY="${PANEL_SETTINGS[5]}"
 DOMAIN="$PANEL_HOST"
 if [[ "$PANEL_HOST" == *:* && "$PANEL_HOST" != \[*\] ]]; then PANEL_HOST="[$PANEL_HOST]"; fi
-BASE="${PANEL_SCHEME}://${PANEL_HOST}:${PANEL_PORT}${PANEL_PATH}"
+BASE="${PANEL_SCHEME}://${PANEL_HOST}:${PANEL_PORT}${PANEL_PATH%/}"
 echo "Panel URL, TLS SNI, certificate and key paths auto-detected from 3x-ui database."
 echo "Detected TLS SNI: $DOMAIN"
 echo "Detected certificate: $CERT"
@@ -161,7 +161,7 @@ except Exception:
 finally:
     con.close()
 PYTOKEN
-CURL=(curl -sS --connect-timeout 6 --max-time 30 -H "Authorization: Bearer $API_TOKEN")
+CURL=(curl -sS --connect-timeout 6 --max-time 30 --resolve "$DOMAIN:$PANEL_PORT:127.0.0.1" -H "Authorization: Bearer $API_TOKEN")
 cleanup_token() {
   python3 - "$DB" "$TOKEN_NAME" <<'PYDEL' >/dev/null 2>&1 || true
 import sqlite3,sys
@@ -174,10 +174,20 @@ PYDEL
 trap 'cleanup_token; rm -rf "$TMP"' EXIT
 
 # Fetch current inbound list; this also validates that the configured API path works.
-"${CURL[@]}" "$BASE/panel/api/inbounds/list" -o "$RESP" || die "Cannot read inbound list via API."
+HTTP_STATUS="$("${CURL[@]}" -o "$RESP" -w '%{http_code}' "$BASE/panel/api/inbounds/list")" || die "Cannot connect to the local 3x-ui API."
+if [[ "$HTTP_STATUS" != "200" ]]; then
+  BODY="$(head -c 500 "$RESP" 2>/dev/null || true)"
+  die "Inbound-list API returned HTTP $HTTP_STATUS (response: ${BODY:-<empty>}). Check panel base path, local listener and API-token compatibility."
+fi
+[[ -s "$RESP" ]] || die "Inbound-list API returned HTTP 200 but an empty response body."
 python3 - "$RESP" "$H3" "$H2" "$PREFIX" <<'PY'
 import json,sys
-d=json.load(open(sys.argv[1]))
+try:
+    with open(sys.argv[1], encoding="utf-8") as f: d=json.load(f)
+except Exception as e:
+    raw=open(sys.argv[1],"rb").read(500).decode("utf-8","replace")
+    raise SystemExit(f"Inbound-list API returned non-JSON data: {e}; response preview={raw!r}")
+
 if not d.get("success"): raise SystemExit("Inbound-list API failed: "+str(d.get("msg","")))
 items=d.get("obj") or []
 ports={int(sys.argv[2])+i for i in range(5)} | {int(sys.argv[3])+i for i in range(5)}
