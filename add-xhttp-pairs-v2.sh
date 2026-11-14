@@ -19,7 +19,7 @@ MODE=check
 echo "Each run creates five pairs (10 inbounds): H3/UDP and H2/TCP."
 
 # Read the panel address directly from the 3x-ui settings database.
-mapfile -t PANEL_SETTINGS < <(python3 - "$DB" <<'PY'
+PANEL_SETTINGS_OUTPUT=$(python3 - "$DB" <<'PY'
 import sqlite3, sys, os, re, subprocess
 db = sqlite3.connect(sys.argv[1])
 try:
@@ -42,11 +42,11 @@ if not cert or not key or not os.path.isfile(cert) or not os.path.isfile(key):
 if not domain:
     try:
         out = subprocess.check_output(["openssl", "x509", "-in", cert, "-noout", "-ext", "subjectAltName"], text=True, stderr=subprocess.DEVNULL)
-        names = re.findall(r"DNS:([^,\\s]+)", out)
+        names = re.findall(r"DNS:([^,\s]+)", out)
         if names:
             domain = names[0]
         else:
-            ips = re.findall(r"IP Address:([^,\\s]+)", out)
+            ips = re.findall(r"IP Address:([^,\s]+)", out)
             if ips:
                 domain = ips[0]
     except Exception:
@@ -59,12 +59,13 @@ print(port)
 print(base)
 PY
 ) || die "Failed to read panel URL from 3x-ui settings."
+mapfile -t PANEL_SETTINGS <<< "$PANEL_SETTINGS_OUTPUT"
 [[ "${#PANEL_SETTINGS[@]}" -eq 4 ]] || die "Unexpected panel settings response."
 PANEL_SCHEME="${PANEL_SETTINGS[0]}"
 PANEL_HOST="${PANEL_SETTINGS[1]}"
 PANEL_PORT="${PANEL_SETTINGS[2]}"
 PANEL_PATH="${PANEL_SETTINGS[3]}"
-if [[ "$PANEL_HOST" == *:* && "$PANEL_HOST" != \\[*\\] ]]; then PANEL_HOST="[$PANEL_HOST]"; fi
+if [[ "$PANEL_HOST" == *:* && "$PANEL_HOST" != \[*\] ]]; then PANEL_HOST="[$PANEL_HOST]"; fi
 BASE="${PANEL_SCHEME}://${PANEL_HOST}:${PANEL_PORT}${PANEL_PATH}"
 echo "Panel URL auto-detected from 3x-ui database (URL path hidden)."
 
