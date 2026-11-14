@@ -244,11 +244,13 @@ for f in "$TMP"/{01..05}-H3.json "$TMP"/{01..05}-H2.json; do
  [[ -s "$RESP" ]] || die "Inbound-add API returned HTTP 200 with an empty body after $DONE creations. Backup: $BACKUP"
  python3 - "$RESP" <<'PY' || die "Could not validate inbound-add response after $DONE creations. Backup: $BACKUP"
 import json,sys
-raw=open(sys.argv[1],"rb").read(1000).decode("utf-8","replace")
+raw_bytes=open(sys.argv[1],"rb").read()
+raw=raw_bytes.decode("utf-8","replace")
 try:
     d=json.loads(raw)
 except Exception as e:
-    raise SystemExit(f"Inbound-add API returned non-JSON data: {e}; response preview={raw!r}")
+    preview=raw[:1000]
+    raise SystemExit(f"Inbound-add API returned non-JSON data: {e}; response preview={preview!r}")
 if not isinstance(d,dict):
     raise SystemExit(f"Inbound-add API returned unexpected JSON type: {type(d).__name__}")
 if not d.get("success"):
