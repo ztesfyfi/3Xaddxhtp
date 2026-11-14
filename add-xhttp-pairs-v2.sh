@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 3x-ui: add five VLESS-XHTTP pairs (H2/TCP + H3/UDP), ten inbounds total.
-# Default mode only checks prerequisites and API connectivity. Use --apply to create.
+# Default mode creates five H2/H3 pairs unattended. Use --check for read-only preflight.
 set -Eeuo pipefail
 umask 077
 
@@ -12,9 +12,9 @@ need(){ command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"; }
 for c in curl python3 openssl ss systemctl; do need "$c"; done
 [[ -s "$DB" ]] || die "3x-ui database not found: $DB"
 systemctl is-active --quiet x-ui || die "x-ui service is not active."
-MODE=check
-[[ "${1:-}" == "--apply" ]] && MODE=apply
-[[ -z "${1:-}" || "${1:-}" == "--apply" ]] || die "Usage: $0 [--apply]"
+MODE=apply
+[[ "${1:-}" == "--check" ]] && MODE=check
+[[ -z "${1:-}" || "${1:-}" == "--check" ]] || die "Usage: $0 [--check]"
 
 echo "Each run creates five pairs (10 inbounds): H3/UDP and H2/TCP."
 
@@ -75,7 +75,7 @@ BASE="${PANEL_SCHEME}://${PANEL_HOST}:${PANEL_PORT}${PANEL_PATH}"
 echo "Panel URL, TLS SNI, certificate and key paths auto-detected from 3x-ui database."
 echo "Detected TLS SNI: $DOMAIN"
 echo "Detected certificate: $CERT"
-echo "Detected private-key path: $KEY"\necho "Generated node prefix: $PREFIX"
+echo "Detected private-key path: $KEY"
 
 [[ -s "$CERT" && -s "$KEY" ]] || die "TLS certificate/key not found."
 openssl x509 -in "$CERT" -noout -checkhost "$DOMAIN" >/dev/null || die "Certificate does not cover $DOMAIN."
@@ -129,32 +129,49 @@ chmod 700 "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 COOKIE="$TMP/cookie"
 RESP="$TMP/response.json"
-CURL=(curl -sS --connect-timeout 6 --max-time 30 -b "$COOKIE" -c "$COOKIE")
 
 echo "Planned ports:"
 for i in 0 1 2 3 4; do
   printf 'Pair %d: H3 UDP %d; H2 TCP %d; path %s/%02d\n' "$((i+1))" "$((H3+i))" "$((H2+i))" "$PATH_PREFIX" "$((i+1))"
 done
 echo "H2/H3 within each pair share one UUID. Each pair has a unique UUID."
-read -r -p "3x-ui username: " USERNAME
-read -r -s -p "3x-ui password: " PASSWORD; echo
-read -r -p "2FA code (press Enter if disabled): " OTP
-python3 - "$TMP/login.json" "$USERNAME" "$PASSWORD" "$OTP" <<'PY'
-import json,sys,os
-d={"username":sys.argv[2],"password":sys.argv[3]}
-if sys.argv[4]: d["twoFactorCode"]=sys.argv[4]
-with open(sys.argv[1],"w") as f: json.dump(d,f)
-os.chmod(sys.argv[1],0o600)
-PY
-unset PASSWORD OTP
-
-"${CURL[@]}" -H 'Content-Type: application/json' --data-binary "@$TMP/login.json" "$BASE/login" -o "$RESP" || die "Panel login request failed."
-python3 - "$RESP" <<'PY'
-import json,sys
-d=json.load(open(sys.argv[1]))
-if not d.get("success"): raise SystemExit("Login failed: "+str(d.get("msg","unknown error")))
-PY
-rm -f "$TMP/login.json"
+# Create a short-lived local API token without panel credentials.
+# Require the complete scoped-token schema; never modify the schema ourselves.
+TOKEN_NAME="xhttp-batch-$(date +%s)-$(od -An -N3 -tx1 /dev/urandom | tr -d ' ')"
+API_TOKEN="$(openssl rand -hex 24)"
+TOKEN_HASH="$(printf '%s' "$API_TOKEN" | openssl dgst -sha256 | awk '{print $NF}')"
+python3 - "$DB" "$TOKEN_NAME" "$TOKEN_HASH" <<'PYTOKEN'
+import sqlite3,sys,time
+db,name,digest=sys.argv[1:]
+con=sqlite3.connect(db)
+try:
+    tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "api_tokens" not in tables:
+        raise SystemExit("No api_tokens table: this 3x-ui version cannot use unattended local API-token auth.")
+    cols={r[1] for r in con.execute("PRAGMA table_info(api_tokens)")}
+    required={"name","token","enabled","created_at","scope","expires_at"}
+    if not required.issubset(cols):
+        raise SystemExit("api_tokens is missing scoped-token fields; refusing unsafe fallback.")
+    con.execute("INSERT INTO api_tokens (name,token,enabled,created_at,scope,expires_at) VALUES (?,?,?,?,?,?)",
+                (name,digest,1,int(time.time()),"node-sync",0))
+    con.commit()
+except Exception:
+    con.rollback()
+    raise
+finally:
+    con.close()
+PYTOKEN
+CURL=(curl -sS --connect-timeout 6 --max-time 30 -H "Authorization: Bearer $API_TOKEN")
+cleanup_token() {
+  python3 - "$DB" "$TOKEN_NAME" <<'PYDEL' >/dev/null 2>&1 || true
+import sqlite3,sys
+con=sqlite3.connect(sys.argv[1])
+con.execute("DELETE FROM api_tokens WHERE name=?",(sys.argv[2],))
+con.commit()
+con.close()
+PYDEL
+}
+trap 'cleanup_token; rm -rf "$TMP"' EXIT
 
 # Fetch current inbound list; this also validates that the configured API path works.
 "${CURL[@]}" "$BASE/panel/api/inbounds/list" -o "$RESP" || die "Cannot read inbound list via API."
@@ -191,14 +208,9 @@ for i in range(1,6):
 PY
 
 if [[ "$MODE" == check ]]; then
- echo "Precheck only: no inbound has been created."
- echo "After reviewing the parameters, rerun with --apply."
+ echo "Read-only preflight complete: no inbounds were created."
  exit 0
 fi
-
-echo "This will add TEN inbounds. Existing inbounds are not deleted or replaced."
-read -r -p "Type CREATE-10 to continue: " CONFIRM
-[[ "$CONFIRM" == CREATE-10 ]] || die "Cancelled."
 
 BACKUP="/root/x-ui-before-xhttp-batch-$(date +%Y%m%d-%H%M%S).db"
 python3 - "$DB" "$BACKUP" <<'PY'
