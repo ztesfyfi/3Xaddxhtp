@@ -75,19 +75,52 @@ BASE="${PANEL_SCHEME}://${PANEL_HOST}:${PANEL_PORT}${PANEL_PATH}"
 echo "Panel URL, TLS SNI, certificate and key paths auto-detected from 3x-ui database."
 echo "Detected TLS SNI: $DOMAIN"
 echo "Detected certificate: $CERT"
-echo "Detected private-key path: $KEY"
+echo "Detected private-key path: $KEY"\necho "Generated node prefix: $PREFIX"
 
 [[ -s "$CERT" && -s "$KEY" ]] || die "TLS certificate/key not found."
 openssl x509 -in "$CERT" -noout -checkhost "$DOMAIN" >/dev/null || die "Certificate does not cover $DOMAIN."
 openssl x509 -in "$CERT" -noout -checkend 86400 >/dev/null || die "Certificate expires within 24 hours."
 openssl pkey -in "$KEY" -noout >/dev/null 2>&1 || die "Private key is unreadable."
-read -r -p "Node name prefix: " PREFIX
-[[ -n "$PREFIX" ]] || die "Name prefix is required."
-read -r -p "H3 UDP starting port [8443]: " V; H3=${V:-8443}
-read -r -p "H2 TCP starting port [9443]: " V; H2=${V:-9443}
-for p in "$H3" "$H2"; do [[ "$p" =~ ^[0-9]+$ ]] && ((p>=1024 && p<=65531)) || die "Invalid starting port: $p"; done
-(( H3+4 < H2 || H2+4 < H3 )) || die "H2 and H3 port ranges overlap."
-read -r -p "XHTTP path prefix [/xhttp]: " V; PATH_PREFIX=${V:-/xhttp}
+# Pick random contiguous five-port blocks, independently for UDP and TCP.
+# A unique prefix is generated on every run so repeated executions never clash.
+PREFIX="XHTTP-$(date +%Y%m%d-%H%M%S)-$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')"
+read -r H3 H2 < <(python3 - "$DB" <<'PYPORT'
+import random, socket, sqlite3, sys
+db=sys.argv[1]
+used=set()
+try:
+    con=sqlite3.connect(f"file:{db}?mode=ro",uri=True)
+    tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "inbounds" in tables:
+        cols={r[1] for r in con.execute("PRAGMA table_info(inbounds)")}
+        if "port" in cols:
+            used={int(r[0]) for r in con.execute("SELECT port FROM inbounds") if r[0]}
+    con.close()
+except Exception as e:
+    raise SystemExit("Cannot inspect existing inbound ports safely: "+str(e))
+def block(kind):
+    stype=socket.SOCK_DGRAM if kind=="UDP" else socket.SOCK_STREAM
+    for _ in range(20000):
+        start=random.randint(10000,60000)
+        ports=range(start,start+5)
+        if any(p in used for p in ports): continue
+        sockets=[]
+        try:
+            for p in ports:
+                s=socket.socket(socket.AF_INET,stype)
+                s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,0)
+                s.bind(("0.0.0.0",p))
+                sockets.append(s)
+            for s in sockets: s.close()
+            return start
+        except OSError:
+            for s in sockets: s.close()
+    raise SystemExit("No free consecutive five-port "+kind+" block found.")
+print(block("UDP"),block("TCP"))
+PYPORT
+) || die "Unable to allocate random contiguous port blocks."
+[[ "$H3" =~ ^[0-9]+$ && "$H2" =~ ^[0-9]+$ ]] || die "Invalid random port allocation."
+PATH_PREFIX="/xhttp"
 [[ "$PATH_PREFIX" == /* && "$PATH_PREFIX" != *" "* && "$PATH_PREFIX" != *"?"* && "$PATH_PREFIX" != *"#"* ]] || die "Invalid XHTTP path prefix."
 
 TMP=$(mktemp -d /root/3xaddxhttp.XXXXXX)
