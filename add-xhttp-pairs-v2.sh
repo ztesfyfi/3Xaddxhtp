@@ -84,6 +84,7 @@ openssl pkey -in "$KEY" -noout >/dev/null 2>&1 || die "Private key is unreadable
 # Pick random contiguous five-port blocks, independently for UDP and TCP.
 # A unique prefix is generated on every run so repeated executions never clash.
 PREFIX="XHTTP-$(date +%Y%m%d-%H%M%S)-$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')"
+echo "Generated node prefix: $PREFIX"
 read -r H3 H2 < <(python3 - "$DB" <<'PYPORT'
 import random, socket, sqlite3, sys
 db=sys.argv[1]
