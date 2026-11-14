@@ -236,6 +236,25 @@ PY
 done
 
 echo "Submitted $DONE/10 inbounds. Backup: $BACKUP"
+if [[ "$DONE" -ne 10 ]]; then die "Expected 10 successful creations, got $DONE."; fi
+echo
+echo "========== VLESS SHARE LINKS =========="
+python3 - "$TMP" "$DOMAIN" <<'PYLINK'
+import json,sys,glob,os
+from urllib.parse import urlencode,quote
+root,host=sys.argv[1:]
+for f in sorted(glob.glob(os.path.join(root,"*.json"))):
+    d=json.load(open(f))
+    uid=d["settings"]["clients"][0]["id"]
+    ss=d["streamSettings"]
+    kind="H3" if "H3" in d["remark"] else "H2"
+    alpn=ss["tlsSettings"]["alpn"][0]
+    path=ss["xhttpSettings"]["path"]
+    params={"encryption":"none","security":"tls","sni":host,"alpn":alpn,
+            "type":"xhttp","path":path,"mode":"auto","fp":"chrome"}
+    link=f"vless://{uid}@{host}:{d['port']}?{urlencode(params,quote_via=quote)}#{quote(d['remark'])}"
+    print(link)
+PYLINK
 echo "H3 UDP ports: $H3-$((H3+4)); H2 TCP ports: $H2-$((H2+4))."
 echo "Allow these UDP/TCP port ranges in your VPS provider firewall."
 echo "No Hiddify services or ports 80/443 were modified."
