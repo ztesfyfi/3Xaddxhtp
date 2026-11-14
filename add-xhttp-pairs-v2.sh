@@ -4,11 +4,6 @@
 set -Eeuo pipefail
 umask 077
 
-DOMAIN="home.680675.xyz"
-PANEL_PORT="6888"
-BASE_PATH="/Vs49Lz5drlEhYH71MM/"
-CERT="/etc/x-ui/certs/fullchain.cer"
-KEY="/etc/x-ui/certs/home.680675.xyz.key"
 DB="/etc/x-ui/x-ui.db"
 
 die(){ echo "ERROR: $*" >&2; exit 1; }
@@ -18,15 +13,22 @@ for c in curl python3 openssl ss systemctl; do need "$c"; done
 [[ -s "$DB" ]] || die "3x-ui database not found: $DB"
 [[ -s "$CERT" && -s "$KEY" ]] || die "TLS certificate/key not found."
 systemctl is-active --quiet x-ui || die "x-ui service is not active."
-openssl x509 -in "$CERT" -noout -checkhost "$DOMAIN" >/dev/null || die "Certificate does not cover $DOMAIN."
-openssl x509 -in "$CERT" -noout -checkend 86400 >/dev/null || die "Certificate expires within 24 hours."
-openssl pkey -in "$KEY" -noout >/dev/null 2>&1 || die "Private key is unreadable."
-
 MODE=check
 [[ "${1:-}" == "--apply" ]] && MODE=apply
 [[ -z "${1:-}" || "${1:-}" == "--apply" ]] || die "Usage: $0 [--apply]"
 
 echo "Each run creates five pairs (10 inbounds): H3/UDP and H2/TCP."
+read -r -p "3x-ui panel base URL (include full base path, e.g. https://127.0.0.1:6888/your-path/): " BASE
+[[ "$BASE" == https://* ]] || die "Panel URL must start with https://"
+[[ "$BASE" == */ ]] || BASE="$BASE/"
+read -r -p "Server domain / TLS SNI (e.g. node.example.com): " DOMAIN
+[[ -n "$DOMAIN" && "$DOMAIN" != *"/"* && "$DOMAIN" != *" "* ]] || die "Invalid TLS domain/SNI."
+read -r -p "Full-chain certificate path: " CERT
+read -r -p "Private-key path: " KEY
+[[ -s "$CERT" && -s "$KEY" ]] || die "TLS certificate/key not found."
+openssl x509 -in "$CERT" -noout -checkhost "$DOMAIN" >/dev/null || die "Certificate does not cover $DOMAIN."
+openssl x509 -in "$CERT" -noout -checkend 86400 >/dev/null || die "Certificate expires within 24 hours."
+openssl pkey -in "$KEY" -noout >/dev/null 2>&1 || die "Private key is unreadable."
 read -r -p "Node name prefix: " PREFIX
 [[ -n "$PREFIX" ]] || die "Name prefix is required."
 read -r -p "H3 UDP starting port [8443]: " V; H3=${V:-8443}
@@ -41,8 +43,7 @@ chmod 700 "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 COOKIE="$TMP/cookie"
 RESP="$TMP/response.json"
-BASE="https://$DOMAIN:$PANEL_PORT$BASE_PATH"
-CURL=(curl -sS --connect-timeout 6 --max-time 30 --resolve "$DOMAIN:$PANEL_PORT:127.0.0.1" -b "$COOKIE" -c "$COOKIE")
+CURL=(curl -sS --connect-timeout 6 --max-time 30 -b "$COOKIE" -c "$COOKIE")
 
 echo "Planned ports:"
 for i in 0 1 2 3 4; do
