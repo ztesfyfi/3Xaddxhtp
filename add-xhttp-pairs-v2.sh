@@ -236,11 +236,23 @@ for f in "$TMP"/{01..05}-H3.json "$TMP"/{01..05}-H2.json; do
  remark=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["remark"])' "$f")
  port=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["port"])' "$f")
  echo "Adding $remark on port $port ..."
- "${CURL[@]}" -H 'Content-Type: application/json' --data-binary "@$f" "$BASE/panel/api/inbounds/add" -o "$RESP" || die "API request failed after $DONE creations. Check panel before retrying; backup: $BACKUP"
- python3 - "$RESP" <<'PY' || die "Panel rejected an inbound after $DONE creations. Check panel before retrying."
+ HTTP_STATUS="$("${CURL[@]}" -H 'Content-Type: application/json' --data-binary "@$f" -o "$RESP" -w '%{http_code}' "$BASE/panel/api/inbounds/add")" || die "API transport failed after $DONE creations. Check panel before retrying; backup: $BACKUP"
+ if [[ "$HTTP_STATUS" != "200" ]]; then
+   BODY="$(head -c 500 "$RESP" 2>/dev/null || true)"
+   die "Inbound-add API returned HTTP $HTTP_STATUS after $DONE creations (response: ${BODY:-<empty>}). Backup: $BACKUP"
+ fi
+ [[ -s "$RESP" ]] || die "Inbound-add API returned HTTP 200 with an empty body after $DONE creations. Backup: $BACKUP"
+ python3 - "$RESP" <<'PY' || die "Could not validate inbound-add response after $DONE creations. Backup: $BACKUP"
 import json,sys
-d=json.load(open(sys.argv[1]))
-if not d.get("success"): raise SystemExit(str(d.get("msg","API returned failure")))
+raw=open(sys.argv[1],"rb").read(1000).decode("utf-8","replace")
+try:
+    d=json.loads(raw)
+except Exception as e:
+    raise SystemExit(f"Inbound-add API returned non-JSON data: {e}; response preview={raw!r}")
+if not isinstance(d,dict):
+    raise SystemExit(f"Inbound-add API returned unexpected JSON type: {type(d).__name__}")
+if not d.get("success"):
+    raise SystemExit("Panel rejected inbound creation: "+str(d.get("msg","API returned failure")))
 PY
  DONE=$((DONE+1))
 done
