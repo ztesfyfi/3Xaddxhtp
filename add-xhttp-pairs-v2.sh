@@ -243,7 +243,7 @@ python3 - "$TMP" "$DOMAIN" <<'PYLINK'
 import json,sys,glob,os
 from urllib.parse import urlencode,quote
 root,host=sys.argv[1:]
-for f in sorted(glob.glob(os.path.join(root,"*.json"))):
+for f in sorted(glob.glob(os.path.join(root,"??-H?.json"))):
     d=json.load(open(f))
     uid=d["settings"]["clients"][0]["id"]
     ss=d["streamSettings"]
