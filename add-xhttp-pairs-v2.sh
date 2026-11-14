@@ -209,7 +209,7 @@ for i in range(1,6):
   obj={
    "enable":True,"remark":f"{prefix}-{i:02d}-{kind}","listen":"","port":port,
    "protocol":"vless","expiryTime":0,"total":0,
-   "settings":{"clients":[{"id":uid,"email":f"xhttp-{prefix.lower()}-{i:02d}","enable":True,"flow":""}],"decryption":"none"},
+   "settings":{"clients":[{"id":uid,"email":f"xhttp-{prefix.lower()}-{i:02d}-{kind.lower()}","enable":True,"flow":""}],"decryption":"none"},
    "streamSettings":{"network":"xhttp","security":"tls",
     "tlsSettings":{"minVersion":"1.3","alpn":alpn,"certificates":[{"certificateFile":cert,"keyFile":key}]},
     "xhttpSettings":{"path":p,"mode":"auto"}},
