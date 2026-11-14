@@ -11,7 +11,6 @@ need(){ command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"; }
 [[ $EUID -eq 0 ]] || die "Run as root."
 for c in curl python3 openssl ss systemctl; do need "$c"; done
 [[ -s "$DB" ]] || die "3x-ui database not found: $DB"
-[[ -s "$CERT" && -s "$KEY" ]] || die "TLS certificate/key not found."
 systemctl is-active --quiet x-ui || die "x-ui service is not active."
 MODE=check
 [[ "${1:-}" == "--apply" ]] && MODE=apply
