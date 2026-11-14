@@ -38,7 +38,7 @@ if not base.startswith("/"):
     base = "/" + base
 base = base.rstrip("/") + "/"
 if not cert or not key or not os.path.isfile(cert) or not os.path.isfile(key):
-    raise SystemExit("Panel TLS is not configured in 3x-ui settings; cannot auto-build an HTTPS panel URL.")
+    raise SystemExit("Panel TLS certificate/key paths are missing or files do not exist in 3x-ui settings.")
 if not domain:
     try:
         out = subprocess.check_output(["openssl", "x509", "-in", cert, "-noout", "-ext", "subjectAltName"], text=True, stderr=subprocess.DEVNULL)
@@ -52,27 +52,31 @@ if not domain:
     except Exception:
         pass
 if not domain:
-    raise SystemExit("Cannot determine panel hostname from webDomain or TLS certificate SAN.")
+    raise SystemExit("Cannot determine node TLS SNI from webDomain or panel certificate SAN.")
 print("https")
 print(domain)
 print(port)
 print(base)
+print(cert)
+print(key)
 PY
 ) || die "Failed to read panel URL from 3x-ui settings."
 mapfile -t PANEL_SETTINGS <<< "$PANEL_SETTINGS_OUTPUT"
-[[ "${#PANEL_SETTINGS[@]}" -eq 4 ]] || die "Unexpected panel settings response."
+[[ "${#PANEL_SETTINGS[@]}" -eq 6 ]] || die "Unexpected panel settings response."
 PANEL_SCHEME="${PANEL_SETTINGS[0]}"
 PANEL_HOST="${PANEL_SETTINGS[1]}"
 PANEL_PORT="${PANEL_SETTINGS[2]}"
 PANEL_PATH="${PANEL_SETTINGS[3]}"
+CERT="${PANEL_SETTINGS[4]}"
+KEY="${PANEL_SETTINGS[5]}"
+DOMAIN="$PANEL_HOST"
 if [[ "$PANEL_HOST" == *:* && "$PANEL_HOST" != \[*\] ]]; then PANEL_HOST="[$PANEL_HOST]"; fi
 BASE="${PANEL_SCHEME}://${PANEL_HOST}:${PANEL_PORT}${PANEL_PATH}"
-echo "Panel URL auto-detected from 3x-ui database (URL path hidden)."
+echo "Panel URL, TLS SNI, certificate and key paths auto-detected from 3x-ui database."
+echo "Detected TLS SNI: $DOMAIN"
+echo "Detected certificate: $CERT"
+echo "Detected private-key path: $KEY"
 
-read -r -p "Server domain / TLS SNI (e.g. node.example.com): " DOMAIN
-[[ -n "$DOMAIN" && "$DOMAIN" != *"/"* && "$DOMAIN" != *" "* ]] || die "Invalid TLS domain/SNI."
-read -r -p "Full-chain certificate path: " CERT
-read -r -p "Private-key path: " KEY
 [[ -s "$CERT" && -s "$KEY" ]] || die "TLS certificate/key not found."
 openssl x509 -in "$CERT" -noout -checkhost "$DOMAIN" >/dev/null || die "Certificate does not cover $DOMAIN."
 openssl x509 -in "$CERT" -noout -checkend 86400 >/dev/null || die "Certificate expires within 24 hours."
