@@ -17,9 +17,57 @@ MODE=check
 [[ -z "${1:-}" || "${1:-}" == "--apply" ]] || die "Usage: $0 [--apply]"
 
 echo "Each run creates five pairs (10 inbounds): H3/UDP and H2/TCP."
-read -r -p "3x-ui panel base URL (include full base path, e.g. https://127.0.0.1:6888/your-path/): " BASE
-[[ "$BASE" == https://* ]] || die "Panel URL must start with https://"
-[[ "$BASE" == */ ]] || BASE="$BASE/"
+
+# Read the panel address directly from the 3x-ui settings database.
+mapfile -t PANEL_SETTINGS < <(python3 - "$DB" <<'PY'
+import sqlite3, sys, os, re, subprocess
+db = sqlite3.connect(sys.argv[1])
+try:
+    rows = db.execute("SELECT key, value FROM settings").fetchall()
+except Exception as e:
+    raise SystemExit("Cannot read 3x-ui settings table: " + str(e))
+s = {str(k): "" if v is None else str(v) for k, v in rows}
+port = s.get("webPort", "").strip()
+base = s.get("webBasePath", "/").strip() or "/"
+domain = s.get("webDomain", "").strip()
+cert = s.get("webCertFile", "").strip()
+key = s.get("webKeyFile", "").strip()
+if not port.isdigit() or not (1 <= int(port) <= 65535):
+    raise SystemExit("Invalid or missing webPort in 3x-ui settings.")
+if not base.startswith("/"):
+    base = "/" + base
+base = base.rstrip("/") + "/"
+if not cert or not key or not os.path.isfile(cert) or not os.path.isfile(key):
+    raise SystemExit("Panel TLS is not configured in 3x-ui settings; cannot auto-build an HTTPS panel URL.")
+if not domain:
+    try:
+        out = subprocess.check_output(["openssl", "x509", "-in", cert, "-noout", "-ext", "subjectAltName"], text=True, stderr=subprocess.DEVNULL)
+        names = re.findall(r"DNS:([^,\\s]+)", out)
+        if names:
+            domain = names[0]
+        else:
+            ips = re.findall(r"IP Address:([^,\\s]+)", out)
+            if ips:
+                domain = ips[0]
+    except Exception:
+        pass
+if not domain:
+    raise SystemExit("Cannot determine panel hostname from webDomain or TLS certificate SAN.")
+print("https")
+print(domain)
+print(port)
+print(base)
+PY
+) || die "Failed to read panel URL from 3x-ui settings."
+[[ "${#PANEL_SETTINGS[@]}" -eq 4 ]] || die "Unexpected panel settings response."
+PANEL_SCHEME="${PANEL_SETTINGS[0]}"
+PANEL_HOST="${PANEL_SETTINGS[1]}"
+PANEL_PORT="${PANEL_SETTINGS[2]}"
+PANEL_PATH="${PANEL_SETTINGS[3]}"
+if [[ "$PANEL_HOST" == *:* && "$PANEL_HOST" != \\[*\\] ]]; then PANEL_HOST="[$PANEL_HOST]"; fi
+BASE="${PANEL_SCHEME}://${PANEL_HOST}:${PANEL_PORT}${PANEL_PATH}"
+echo "Panel URL auto-detected from 3x-ui database (URL path hidden)."
+
 read -r -p "Server domain / TLS SNI (e.g. node.example.com): " DOMAIN
 [[ -n "$DOMAIN" && "$DOMAIN" != *"/"* && "$DOMAIN" != *" "* ]] || die "Invalid TLS domain/SNI."
 read -r -p "Full-chain certificate path: " CERT
